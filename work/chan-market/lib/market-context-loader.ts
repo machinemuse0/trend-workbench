@@ -39,10 +39,11 @@ export async function loadMarketContext(request:MarketContextRequest):Promise<vo
   onHigher(derived?{interval:higher,status:'ready',data:derived}:{interval:higher,status:'error'});
 }
 
-/** A background refresh replaces the displayed pair together. On initial load
- * the candles can render while their own parent is still pending. */
+/** Publish a changed latest candle promptly. A preview carries loading context
+ * so analysis never pairs new primary candles with a previous parent response. */
 export function createChartFeedController(fetcher?:Fetcher) {
   let active:AbortController|null=null;
+  let lastPrimary:MarketData|undefined;
   function cancel() { active?.abort();active=null; }
   async function load(request:Pick<MarketContextRequest,'market'|'symbol'|'interval'|'onPrimaryError'> & {
     background:boolean; onSnapshot:(snapshot:ChartSnapshot)=>void;
@@ -56,9 +57,20 @@ export function createChartFeedController(fetcher?:Fetcher) {
     try {
       await loadMarketContext({...request,fetcher,signal:controller.signal,
         onPrimary(data) {
-          primary=data;
+          const previous=lastPrimary;
+          const oldBar=previous?.candles.at(-1),newBar=data.candles.at(-1);
+          const sameSeries=previous?.instrument.market===data.instrument.market
+            &&previous.instrument.symbol===data.instrument.symbol&&previous.interval===data.interval
+            &&previous.source===data.source&&previous.adjustment===data.adjustment;
+          if(request.background&&sameSeries&&oldBar&&newBar&&(newBar.time<oldBar.time
+            ||newBar.time===oldBar.time&&oldBar.closed===true&&newBar.closed===false
+            ||Date.parse(data.asOf)<Date.parse(previous.asOf)))return;
+          primary=lastPrimary=data;
           receivedAt=Date.now();
-          if(!parentInterval||!request.background)request.onSnapshot({data,receivedAt,higher:{interval:parentInterval,status:parentInterval?'loading':'none'}});
+          const changed=!sameSeries||!oldBar||!newBar||newBar.time!==oldBar.time
+            ||newBar.open!==oldBar.open||newBar.high!==oldBar.high||newBar.low!==oldBar.low
+            ||newBar.close!==oldBar.close||newBar.volume!==oldBar.volume||newBar.closed!==oldBar.closed;
+          if(!parentInterval||!request.background||changed)request.onSnapshot({data,receivedAt,higher:{interval:parentInterval,status:parentInterval?'loading':'none'}});
         },
         onHigher(higher) {
           if(primary)request.onSnapshot({data:primary,higher,receivedAt});

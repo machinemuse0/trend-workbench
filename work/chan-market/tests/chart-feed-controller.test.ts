@@ -1,13 +1,13 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createChartFeedController,type ChartSnapshot} from '../lib/market-context-loader.ts';
-import type {Interval,MarketData} from '../lib/market-types.ts';
+import type {Candle,Interval,MarketData} from '../lib/market-types.ts';
 
 const base={market:'crypto' as const,symbol:'BTCUSDT',interval:'1h' as const};
-function response(symbol:string,interval:Interval,close:number) {
+function response(symbol:string,interval:Interval,close:number,bar:Partial<Candle>={}) {
   const data:MarketData={
     instrument:{id:`crypto:${symbol}`,market:'crypto',symbol,name:symbol,currency:'USDT',exchange:'Binance'},
-    interval,candles:[{time:1700000000,open:close,high:close+1,low:close-1,close,volume:10,closed:true}],
+    interval,candles:[{time:1700000000,open:close,high:close+1,low:close-1,close,volume:10,closed:true,...bar}],
     source:'Binance',asOf:'2024-01-01T00:00:00Z',adjustment:'不复权',warnings:[],delayNotice:'',availableIntervals:['1h','4h','1M'],
   };
   return new Response(JSON.stringify(data));
@@ -19,7 +19,7 @@ function deferredFeed(){
   function load(symbol:string,background=false,interval:Interval='1h'){
     return controller.load({...base,symbol,interval,background,onSnapshot:snapshot=>snapshots.push(snapshot),onPrimaryError:message=>errors.push(message)});
   }
-  function settle(index:number,symbol:string,interval:Interval,close:number){pending[index].resolve(response(symbol,interval,close));}
+  function settle(index:number,symbol:string,interval:Interval,close:number,bar?:Partial<Candle>){pending[index].resolve(response(symbol,interval,close,bar));}
   return {pending,controller,load,settle,snapshots,errors};
 }
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
@@ -38,7 +38,7 @@ test('foreground candles arrive early, with the higher status bound to the same 
   assert.equal(ready.higher.data?.candles[0].close,120);
 });
 
-test('timer ticks during a slow refresh keep one request and deliver only the new coherent pair',async()=>{
+test('a changed background candle arrives early and never uses the previous parent',async()=>{
   const feed=deferredFeed(),first=feed.load('BTCUSDT');
   feed.settle(0,'BTCUSDT','1h',100);feed.settle(1,'BTCUSDT','4h',120);
   await first;
@@ -48,10 +48,15 @@ test('timer ticks during a slow refresh keep one request and deliver only the ne
   await feed.load('BTCUSDT',true);
   assert.equal(feed.pending.length,4);
   assert.equal(feed.pending[3].signal.aborted,false);
-  assert.equal(feed.snapshots.at(-1)?.data.candles[0].close,100);
+  const preview=feed.snapshots.at(-1);
+  assert.equal(preview?.data.candles[0].close,200);
+  assert.deepEqual(preview?.higher,{interval:'4h',status:'loading'});
   feed.settle(3,'BTCUSDT','4h',240);
   await next;
-  assert.deepEqual(feed.snapshots.slice(2).map(s=>[s.data.candles[0].close,s.higher.data?.candles[0].close]),[[200,240]]);
+  const ready=feed.snapshots.at(-1);
+  assert.equal(ready?.data,preview?.data);
+  assert.equal(ready?.receivedAt,preview?.receivedAt);
+  assert.equal(ready?.higher.data?.candles[0].close,240);
 });
 
 test('late parent and error from two cancelled selections cannot replace the third selection',async()=>{
@@ -78,8 +83,9 @@ test('replay cancellation suppresses a late parent, and returning to live starts
   const fresh=feed.load('BTCUSDT',true);
   feed.settle(2,'BTCUSDT','1h',200);feed.settle(3,'BTCUSDT','4h',240);
   await fresh;
-  assert.deepEqual(feed.snapshots.map(s=>s.higher.status),['loading','ready']);
-  assert.equal(feed.snapshots.at(-1)?.data.candles[0].close,200);
+  assert.deepEqual(feed.snapshots.map(s=>s.higher.status),['loading','loading','ready']);
+  assert.equal(feed.snapshots[1].data.candles[0].close,200);
+  assert.equal(feed.snapshots.at(-1)?.data,feed.snapshots[1].data);
 });
 
 test('monthly refresh emits its snapshot when the primary settles even without a parent',async()=>{
@@ -88,4 +94,41 @@ test('monthly refresh emits its snapshot when the primary settles even without a
   await done;
   assert.equal(feed.pending.length,1);
   assert.deepEqual(feed.snapshots.map(s=>s.higher.status),['none']);
+});
+
+test('unchanged ticks keep the current analysis visible until the refresh is coherent',async()=>{
+  const feed=deferredFeed(),first=feed.load('BTCUSDT');
+  feed.settle(0,'BTCUSDT','1h',100);feed.settle(1,'BTCUSDT','4h',120);
+  await first;
+  const refresh=feed.load('BTCUSDT',true);
+  feed.settle(2,'BTCUSDT','1h',100);
+  await tick();
+  assert.equal(feed.snapshots.length,2);
+  assert.equal(feed.snapshots.at(-1)?.higher.status,'ready');
+  feed.settle(3,'BTCUSDT','4h',125);
+  await refresh;
+  assert.equal(feed.snapshots.at(-1)?.higher.data?.candles[0].close,125);
+});
+
+test('intrabar volume and a new candle publish early, older snapshots cannot roll them back',async()=>{
+  const feed=deferredFeed(),first=feed.load('BTCUSDT');
+  feed.settle(0,'BTCUSDT','1h',100,{closed:false});feed.settle(1,'BTCUSDT','4h',120);
+  await first;
+  const sameBar=feed.load('BTCUSDT',true);
+  feed.settle(2,'BTCUSDT','1h',100,{closed:false,volume:11});
+  await tick();
+  assert.equal(feed.snapshots.at(-1)?.data.candles[0].volume,11);
+  assert.equal(feed.snapshots.at(-1)?.higher.status,'loading');
+  feed.settle(3,'BTCUSDT','4h',120);await sameBar;
+  const newBar=feed.load('BTCUSDT',true),nextTime=1700003600;
+  feed.settle(4,'BTCUSDT','1h',101,{time:nextTime});
+  await tick();
+  assert.equal(feed.snapshots.at(-1)?.data.candles[0].time,nextTime);
+  feed.settle(5,'BTCUSDT','4h',120);await newBar;
+  for(const [index,bar] of [{time:1700000000},{time:nextTime,closed:false}].entries()){
+    const before=feed.snapshots.length,stale=feed.load('BTCUSDT',true),i=6+index*2;
+    feed.settle(i,'BTCUSDT','1h',98,bar);feed.settle(i+1,'BTCUSDT','4h',120);
+    await stale;
+    assert.equal(feed.snapshots.length,before);
+  }
 });
