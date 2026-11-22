@@ -44,7 +44,11 @@ export async function loadMarketContext(request:MarketContextRequest):Promise<vo
 export function createChartFeedController(fetcher?:Fetcher) {
   let active:AbortController|null=null;
   let lastPrimary:MarketData|undefined;
-  function cancel() { active?.abort();active=null; }
+  function cancel() {
+    const previous=active;
+    active=null;
+    previous?.abort();
+  }
   async function load(request:Pick<MarketContextRequest,'market'|'symbol'|'interval'|'onPrimaryError'> & {
     background:boolean; onSnapshot:(snapshot:ChartSnapshot)=>void;
   }) {
@@ -62,9 +66,16 @@ export function createChartFeedController(fetcher?:Fetcher) {
           const sameSeries=previous?.instrument.market===data.instrument.market
             &&previous.instrument.symbol===data.instrument.symbol&&previous.interval===data.interval
             &&previous.source===data.source&&previous.adjustment===data.adjustment;
-          if(request.background&&sameSeries&&oldBar&&newBar&&(newBar.time<oldBar.time
-            ||newBar.time===oldBar.time&&oldBar.closed===true&&newBar.closed===false
-            ||Date.parse(data.asOf)<Date.parse(previous.asOf)))return;
+          if(request.background&&sameSeries&&oldBar&&newBar) {
+            const sameBar=newBar.time===oldBar.time;
+            const reopened=sameBar&&oldBar.closed===true&&newBar.closed===false;
+            const olderUpdate=sameBar&&newBar.closed===oldBar.closed&&Date.parse(data.asOf)<Date.parse(previous.asOf);
+            if(newBar.time<oldBar.time||reopened||olderUpdate) {
+              // Free the next poll even if the matching parent ignores cancellation.
+              cancel();
+              return;
+            }
+          }
           primary=lastPrimary=data;
           receivedAt=Date.now();
           const changed=!sameSeries||!oldBar||!newBar||newBar.time!==oldBar.time

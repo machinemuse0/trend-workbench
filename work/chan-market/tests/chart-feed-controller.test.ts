@@ -4,11 +4,11 @@ import {createChartFeedController,type ChartSnapshot} from '../lib/market-contex
 import type {Candle,Interval,MarketData} from '../lib/market-types.ts';
 
 const base={market:'crypto' as const,symbol:'BTCUSDT',interval:'1h' as const};
-function response(symbol:string,interval:Interval,close:number,bar:Partial<Candle>={}) {
+function response(symbol:string,interval:Interval,close:number,bar:Partial<Candle>={},asOf='2024-01-01T00:00:00Z') {
   const data:MarketData={
     instrument:{id:`crypto:${symbol}`,market:'crypto',symbol,name:symbol,currency:'USDT',exchange:'Binance'},
     interval,candles:[{time:1700000000,open:close,high:close+1,low:close-1,close,volume:10,closed:true,...bar}],
-    source:'Binance',asOf:'2024-01-01T00:00:00Z',adjustment:'不复权',warnings:[],delayNotice:'',availableIntervals:['1h','4h','1M'],
+    source:'Binance',asOf,adjustment:'不复权',warnings:[],delayNotice:'',availableIntervals:['1h','4h','1M'],
   };
   return new Response(JSON.stringify(data));
 }
@@ -19,7 +19,9 @@ function deferredFeed(){
   function load(symbol:string,background=false,interval:Interval='1h'){
     return controller.load({...base,symbol,interval,background,onSnapshot:snapshot=>snapshots.push(snapshot),onPrimaryError:message=>errors.push(message)});
   }
-  function settle(index:number,symbol:string,interval:Interval,close:number,bar?:Partial<Candle>){pending[index].resolve(response(symbol,interval,close,bar));}
+  function settle(index:number,symbol:string,interval:Interval,close:number,bar?:Partial<Candle>,asOf?:string){
+    pending[index].resolve(response(symbol,interval,close,bar,asOf));
+  }
   return {pending,controller,load,settle,snapshots,errors};
 }
 const tick=()=>new Promise<void>(resolve=>setImmediate(resolve));
@@ -131,4 +133,60 @@ test('intrabar volume and a new candle publish early, older snapshots cannot rol
     await stale;
     assert.equal(feed.snapshots.length,before);
   }
+});
+
+test('asOf orders updates within one candle state but cannot override a new bar or a close',async()=>{
+  const feed=deferredFeed(),first=feed.load('BTCUSDT');
+  const time=1700000000;
+  feed.settle(0,'BTCUSDT','1h',100,{time,closed:false},'2024-01-01T00:00:05Z');
+  feed.settle(1,'BTCUSDT','4h',120);
+  await first;
+
+  const stale=feed.load('BTCUSDT',true);
+  feed.settle(2,'BTCUSDT','1h',98,{time,closed:false},'2024-01-01T00:00:04Z');
+  feed.settle(3,'BTCUSDT','4h',120);
+  await stale;
+  assert.equal(feed.snapshots.length,2);
+  assert.equal(feed.snapshots.at(-1)?.data.candles[0].close,100);
+
+  for(const [i,bar] of [{time,closed:true},{time:time+3600,closed:false}].entries()){
+    const refresh=feed.load('BTCUSDT',true),index=4+i*2;
+    feed.settle(index,'BTCUSDT','1h',101+i,bar,i===0?'2024-01-01T00:00:04Z':'2024-01-01T00:00:03Z');
+    await tick();
+    const preview=feed.snapshots.at(-1);
+    assert.equal(preview?.higher.status,'loading');
+    assert.equal(preview?.data.candles[0].time,bar.time);
+    assert.equal(preview?.data.candles[0].closed,bar.closed);
+    feed.settle(index+1,'BTCUSDT','4h',120);
+    await refresh;
+    assert.equal(feed.snapshots.at(-1)?.data,preview?.data);
+    assert.equal(feed.snapshots.at(-1)?.higher.status,'ready');
+  }
+});
+
+test('a stale primary aborts its parent and frees the next refresh before the parent settles',async()=>{
+  const feed=deferredFeed(),first=feed.load('BTCUSDT');
+  feed.settle(0,'BTCUSDT','1h',100);feed.settle(1,'BTCUSDT','4h',120);
+  await first;
+
+  const stale=feed.load('BTCUSDT',true);
+  feed.settle(2,'BTCUSDT','1h',98,{time:1699996400});
+  await tick();
+  assert.equal(feed.pending[3].signal.aborted,true);
+  assert.equal(feed.snapshots.length,2);
+
+  const fresh=feed.load('BTCUSDT',true);
+  assert.equal(feed.pending.length,6);
+  // This transport deliberately completes the old request after abort.
+  feed.settle(3,'BTCUSDT','4h',99);
+  await stale;
+  await feed.load('BTCUSDT',true);
+  assert.equal(feed.pending.length,6,'the old attempt must not clear the new active request');
+  assert.equal(feed.snapshots.length,2);
+  assert.deepEqual(feed.errors,[]);
+
+  feed.settle(4,'BTCUSDT','1h',101);feed.settle(5,'BTCUSDT','4h',121);
+  await fresh;
+  assert.equal(feed.snapshots.at(-1)?.data.candles[0].close,101);
+  assert.equal(feed.snapshots.at(-1)?.higher.data?.candles[0].close,121);
 });
