@@ -303,6 +303,7 @@ html[lang=en] .brand b{font-size:17px;letter-spacing:1px}html[lang=en] .page-hea
 @media(max-width:700px){.forecast-heading h2{font-size:20px}.forecast-side{padding:18px}.forecast-zone>strong{font-size:26px}.forecast-level-grid{grid-template-columns:1fr 1fr;gap:18px 12px}.forecast-level-grid>.forecast-invalidation{grid-column:1/-1}.forecast-level-grid strong{font-size:21px}.forecast-reference{gap:8px 16px}.forecast-boundaries{gap:12px;padding:17px}.forecast-boundaries strong{font-size:22px}}
 @media(max-width:1400px){.confluence-card{grid-column:1/-1;padding:20px}.confluence-evidence{grid-template-columns:repeat(3,minmax(0,1fr));gap:18px}.confluence-decision{margin-top:14px}}
 @media(max-width:700px){.confluence-card{grid-column:auto;padding:21px}.confluence-evidence{grid-template-columns:1fr;gap:0}.confluence-decision{font-size:20px}.confluence-evidence dd{font-size:16px}.confluence-summary,.plan-confluence p{font-size:14px}}
+.forecast-minute-check{margin-top:10px}.forecast-minute-check button:disabled{opacity:.62;cursor:wait}
 .journal-controls label{min-width:0;max-width:100%;flex-wrap:wrap}.journal-controls select{min-width:0;max-width:100%;border:1px solid #49606d;border-radius:4px;background:#0e1920;color:#e0ecef;padding:7px 9px;font-size:13px}.journal-controls select:focus-visible{outline:2px solid #b7d6e5;outline-offset:3px}
 
 /* Collapsed local historical validation; all outcome values stay neutral. */

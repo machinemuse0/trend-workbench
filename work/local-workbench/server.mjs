@@ -2,7 +2,7 @@ import http from 'node:http';
 import { readFile, stat } from 'node:fs/promises';
 import { dirname, resolve, relative, extname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { MarketError, getCandles, searchInstruments, parseMarket, parseSearchMarket, parseInterval, resetMarketNetworkFailures } from './market-data.mjs';
+import { MarketError, getCandles, getForecastMinuteWindow, searchInstruments, parseMarket, parseSearchMarket, parseInterval, resetMarketNetworkFailures } from './market-data.mjs';
 import { createNetworkRouteMonitor } from './network-bootstrap.mjs';
 
 // Market adapters perform no requests at module load. Configure the existing
@@ -75,6 +75,13 @@ const server=http.createServer(async(req,res)=>{
       const limit=Number(url.searchParams.get('limit')||'800');
       if(!Number.isInteger(limit)||limit<1||limit>2000)throw new MarketError('K线数量须为1至2000。',400);
       return json(res,200,await marketRequest(()=>getCandles(market,symbol,interval,limit)));
+    }
+    if(url.pathname==='/api/forecast-minute-window'){
+      const {searchParams}=url;
+      const symbol=searchParams.get('symbol'),source=searchParams.get('source');
+      if(!symbol||!source)throw new MarketError('缺少原记录的交易对或来源。',400);
+      const start=Number(searchParams.get('start')),end=Number(searchParams.get('end'));
+      return json(res,200,await marketRequest(()=>getForecastMinuteWindow(symbol,source,start,end)));
     }
     if(url.pathname.startsWith('/api/'))return json(res,404,{error:'Unknown endpoint'});
     let decoded;

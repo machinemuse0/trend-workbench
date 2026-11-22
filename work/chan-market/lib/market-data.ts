@@ -1,5 +1,5 @@
 import type { Candle, Instrument, Interval, Market, MarketData } from './market-types';
-import { getCryptoCandles, searchCrypto, CryptoDataError } from './crypto-sources.ts';
+import { getCryptoCandles, getCryptoMinuteWindow, searchCrypto, CryptoDataError } from './crypto-sources.ts';
 export { resetMarketNetworkFailures } from './crypto-sources.ts';
 import { aggregateEquityFourHour } from './equity-four-hour.ts';
 import { chooseEquityHistory } from './equity-history.ts';
@@ -321,6 +321,13 @@ function ensure(rows: Candle[], minimum = 10): Candle[] {
   if (!data.length) throw new MarketError('未找到有效OHLC行情，请核对标的或更换周期。',404);
   if (data.length < minimum) throw new MarketError(`历史K线不足${minimum}根，暂不能进行结构分析。`,422);
   return data;
+}
+export async function getForecastMinuteWindow(symbol:string,source:string,start:number,end:number):Promise<MarketData> {
+  try { return await getCryptoMinuteWindow(symbol,source,start,end); }
+  catch(error) {
+    if(error instanceof CryptoDataError)throw new MarketError(error.message,error.status,error.upstreamStatus);
+    throw error;
+  }
 }
 async function cryptoCandles(symbol: string, interval: Interval, limit: number): Promise<MarketData> {
   try { return await getCryptoCandles(symbol, interval, limit); }
