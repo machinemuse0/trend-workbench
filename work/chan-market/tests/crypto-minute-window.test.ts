@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {createCryptoClient} from '../lib/crypto-sources.ts';
+import {readMarketResponse} from '../lib/market-response.ts';
 
 const start=Date.UTC(2026,10,21);
 const now=()=>start+2*86400000;
@@ -38,8 +39,8 @@ for(const provider of ['Binance','OKX','Bitget','Bybit'] as const){
         assert.equal(url.pathname,'/api/v5/market/history-candles');
         assert.equal(params.get('instId'),id);
         assert.equal(params.get('bar'),'1m');
-        assert.ok(limit<=300);
-        return Response.json({code:'0',data:full.filter(time=>time<Number(params.get('after'))).reverse().slice(0,limit)
+        // Emulate a venue that silently caps history responses at 100.
+        return Response.json({code:'0',data:full.filter(time=>time<Number(params.get('after'))).reverse().slice(0,Math.min(limit,100))
           .map(time=>[...row(time),'0','0','1'])});
       }
       assert.equal(url.pathname,'/api/v2/spot/market/history-candles');
@@ -51,9 +52,16 @@ for(const provider of ['Binance','OKX','Bitget','Bybit'] as const){
     const data=await client.getCryptoMinuteWindow('BTCUSDT',source,start/1000,(start+86400000)/1000);
     assert.equal(data.source,source);
     assert.equal(data.interval,'1m');
-    assert.equal(pages.length,{Binance:2,OKX:5,Bitget:8,Bybit:2}[provider]);
+    assert.equal(data.candles.length,1440,'all minutes in the day must be present');
+    assert.equal(pages.length,{Binance:2,OKX:15,Bitget:8,Bybit:2}[provider]);
+    if(provider==='OKX')assert.ok(pages.every(page=>Number(page.searchParams.get('limit'))<=100));
     assert.deepEqual(data.candles.map(c=>c.time),full.slice(1,-1).map(time=>time/1000));
     assert.ok(data.candles.every(c=>c.closed===true));
+    if(provider==='OKX'){
+      const fourHours=await client.getCryptoMinuteWindow('BTCUSDT',source,start/1000,start/1000+14400);
+      assert.equal(fourHours.candles.length,240);
+      assert.deepEqual(pages.slice(15).map(page=>Number(page.searchParams.get('limit'))),[100,100,40]);
+    }
   });
 }
 
@@ -63,14 +71,17 @@ test('a Kraken minute window is restricted to its own recent OHLC and never fabr
     const url=new URL(input);
     assert.equal(url.hostname,'api.kraken.com');
     calls.push(url);
-    return url.pathname.endsWith('AssetPairs')
-      ?Response.json({error:[],result:{XBTUSDT:{altname:'XBTUSDT',wsname:'XBT/USDT'}}})
-      :Response.json({error:[],result:{XBTUSDT:full.slice(-720).map(time=>[time/1000,'100','110','90','101','0','2','5'])}});
+    if(url.pathname.endsWith('AssetPairs'))
+      return Response.json({error:[],result:{XBTUSDT:{altname:'XBTUSDT',wsname:'XBT/USDT'}}});
+    const rows=full.slice(-720).map(time=>[time/1000,'100','110','90','101','0','2','5']);
+    const conflict=[...rows[0]];conflict[3]='80';
+    return Response.json({error:[],result:{XBTUSDT:[...rows,conflict]}});
   },now);
   const data=await client.getCryptoMinuteWindow('BTCUSDT','Kraken 公共现货行情 · XBTUSDT',start/1000,(start+86400000)/1000);
   assert.equal(calls.length,2);
   assert.equal(calls[1].searchParams.get('interval'),'1');
-  assert.ok(data.candles.length>0&&data.candles.length<1440);
+  assert.equal(data.candles.length,718);
+  assert.ok(!data.candles.some(bar=>bar.time===full.at(-720)!/1000));
   assert.ok(data.candles.every(c=>c.closed===true&&c.time<(start+86400000)/1000));
 });
 
@@ -89,4 +100,23 @@ test('source mismatch cannot fall over and invalid or oversized ranges make no n
   assert.equal(calls,0);
   await assert.rejects(client.getCryptoMinuteWindow('BTCUSDT','Binance 公共现货行情 · BTCUSD',a,a+300),{status:404});
   assert.equal(calls,1);
+});
+
+test('invalid rows and conflicting minutes become gaps while identical copies are coalesced',async()=>{
+  const minute=(i:number)=>[...row(start+i*60000),'0','0','1'];
+  const client=createCryptoClient(async input=>{
+    const url=new URL(input);
+    assert.equal(url.hostname,hosts.OKX);
+    if(url.pathname.endsWith('/instruments'))return Response.json(directories.OKX);
+    const badHigh=minute(1);badHigh[2]='99';
+    const conflicting=minute(2);conflicting[3]='80';
+    const missingVolume=[...minute(3).slice(0,5),null,...minute(3).slice(6)];
+    const zeroVolume=minute(4);zeroVolume[5]='0';
+    return Response.json({code:'0',data:[zeroVolume,minute(2),minute(0),badHigh,conflicting,missingVolume,minute(0)]});
+  },now);
+  const from=start/1000;
+  const data=await client.getCryptoMinuteWindow('BTCUSDT','OKX 公共现货行情 · BTC-USDT',from,from+300);
+  const wire=await readMarketResponse(Response.json(data),{market:'crypto',symbol:'BTCUSDT',interval:'1m'});
+  assert.deepEqual(wire.candles.map(bar=>bar.time),[from,from+240]);
+  assert.equal(wire.candles[1].volume,0);
 });
