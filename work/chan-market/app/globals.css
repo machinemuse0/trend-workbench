@@ -238,6 +238,12 @@ html[lang=en] .brand b{font-size:17px;letter-spacing:1px}html[lang=en] .page-hea
 .confluence-evidence dd{font-size:15px;line-height:1.7;color:#e1ebee;font-weight:500;margin:0;overflow-wrap:anywhere}
 .confluence-evidence small{display:block;font-size:12px;line-height:1.7;color:#adbfca;font-weight:400;margin-top:4px}
 .confluence-evidence .unavailable dd{color:#f2cc87}
+.center-breakout-flow{margin-top:16px;padding-top:13px;border-top:1px solid #2a3b45}
+.center-breakout-flow h3{font-size:14px;color:#e1ebee;margin:0 0 7px;font-weight:600}
+.center-breakout-flow p{font-size:12px;line-height:1.7;color:#adbfca;margin:5px 0}
+.center-breakout-flow dl{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px 12px;margin:9px 0}
+.center-breakout-flow dt{font-size:12px;color:#a8c0cc}
+.center-breakout-flow dd{font-size:15px;font-weight:600;overflow-wrap:anywhere;margin:2px 0 0}
 .confluence-foot{font-size:12px;line-height:1.8;color:#acc2cc;margin:4px 0 0;border-top:1px solid #2a3b45;padding-top:12px}
 .confluence-grade{display:inline-flex;align-items:center;gap:6px;font-size:13px;line-height:1.5;font-weight:500;padding:4px 8px;border:1px solid #58707c;border-radius:4px;color:#d2e2e9;background:#1b2c36}
 .confluence-grade.aligned{border-color:#4b947d;background:#173e33;color:#a2efd2}

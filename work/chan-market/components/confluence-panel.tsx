@@ -3,6 +3,7 @@ import type { Analysis, Interval, Market, TradePlan } from '@/lib/market-types';
 import { useLanguage, type Language } from '@/lib/language';
 import { isDirectionUnclear } from '@/lib/plan-presentation';
 import type { MarketForecast } from '@/lib/forecast-types';
+import type { CenterBreakout } from '@/lib/center-breakout';
 import { forecastSummary, forecastHigherText, forecastPeriod, forecastRegimeText } from './forecast-copy';
 import ForecastTitleText from './forecast-title-text';
 
@@ -96,7 +97,37 @@ export function PlanConfluence({analysis,plan,language}:{analysis:Analysis;plan:
   </div>;
 }
 
-export default function ConfluencePanel({analysis,loading,language:override,interval,market,forecast,dataFresh=true}:{analysis:Analysis|null;loading:boolean;language?:Language;interval?:Interval;market?:Market;forecast?:MarketForecast;dataFresh?:boolean}) {
+function BreakoutFlow({breakout,loading,dataFresh,language,locale}:{
+  breakout:CenterBreakout|null;loading:boolean;dataFresh:boolean;language:Language;locale:string;
+}) {
+  const t=(zh:string,en:string)=>pick(language,zh,en);
+  const price=new Intl.NumberFormat(locale,{maximumFractionDigits:2});
+  const percent=new Intl.NumberFormat(locale,{style:'percent',minimumFractionDigits:1,maximumFractionDigits:1});
+  const time=new Intl.DateTimeFormat(locale,{year:'numeric',month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',timeZone:'UTC',timeZoneName:'short'});
+  const buyTenths=breakout?.takerBuyShare!=null?Math.round(breakout.takerBuyShare*1000):null;
+  const up=breakout?.direction==='up';
+  const layer=breakout?.layer==='stroke'?t('笔中枢','Stroke center'):t('线段中枢','Segment center');
+  const empty=loading?t('正在识别突破','Checking for a breakout'):dataFresh
+    ?t('当前周期暂无已确认突破','No confirmed breakout in this timeframe'):t('等待有效行情','Waiting for valid market data');
+  return <div className="center-breakout-flow" data-testid="center-breakout-flow">
+    <h3>{t('中枢突破成交','Center breakout flow')}</h3>
+    {breakout?<div>
+      <p>{layer} · {up?t('向上突破','Upward breakout'):t('向下跌破','Downward break')} · {time.format(breakout.confirmedAt*1000)}</p>
+      <dl>
+        <div><dt>{t('突破价','Breakout level')}</dt><dd>{price.format(breakout.boundary)} USDT</dd></div>
+        <div><dt>{t('确认收盘价','Confirmation close')}</dt><dd>{price.format(breakout.close)} USDT</dd></div>
+        {buyTenths!==null&&<>
+          <div><dt>{t('主动买入','Active buys')}</dt><dd className="positive">{percent.format(buyTenths/1000)}</dd></div>
+          <div><dt>{t('主动卖出','Active sells')}</dt><dd className="negative">{percent.format((1000-buyTenths)/1000)}</dd></div>
+        </>}
+      </dl>
+      <p>{breakout.exchange} {t('现货','spot')} · {buyTenths===null?t('当前来源未提供可用的主动买卖占比','Active-side split unavailable from this feed')
+        :t('统计突破确认 K 线整根的 USDT 成交额','USDT turnover over the full confirmation candle')}</p>
+    </div>:<p>{empty}</p>}
+  </div>;
+}
+
+export default function ConfluencePanel({analysis,loading,language:override,interval,market,forecast,dataFresh=true,breakout}:{analysis:Analysis|null;loading:boolean;language?:Language;interval?:Interval;market?:Market;forecast?:MarketForecast;dataFresh?:boolean;breakout?:CenterBreakout|null}) {
   const languageContext=useLanguage();
   const language=override??languageContext.language;
   const t=(zh:string,en:string)=>pick(language,zh,en);
@@ -139,5 +170,6 @@ export default function ConfluencePanel({analysis,loading,language:override,inte
       </dl>
       {!forecast&&<p className="confluence-foot">{t('指标配合与价格触发分开显示；已触发计划按原止损跟踪。','Indicator evidence is separate from price triggers. Triggered plans retain their original stops.')}</p>}
     </>:!forecast&&<p className="empty-mini">{loading?t('正在汇总指标','Loading indicator evidence'):t('加载行情后显示综合判断','Load market data to see the combined assessment')}</p>}
+    {breakout!==undefined&&<BreakoutFlow breakout={breakout} loading={loading} dataFresh={dataFresh} language={language} locale={language==='zh'?'zh-CN':'en-US'}/>}
   </section>;
 }

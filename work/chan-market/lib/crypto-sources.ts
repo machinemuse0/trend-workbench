@@ -239,7 +239,15 @@ export function createCryptoClient(fetcher: Fetcher = (url,init)=>fetch(url,init
           break; // An unavailable backfill page must not erase the live window.
         }
         if(!raw.length)break;
-        const parsed=observed(raw.map(r=>({time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),close:Number(r[4]),volume:Number(r[5]),closed:Number(r[6])<now()-2000})));
+        const parsed=observed(raw.map(r=>{
+          // Binance Spot carries total and taker-buy quote volume in slots 7 and 10.
+          const total=typeof r[7]==='string'&&r[7].trim()?Number(r[7]):NaN;
+          const buy=typeof r[10]==='string'&&r[10].trim()?Number(r[10]):NaN;
+          const hasFlow=Number.isFinite(total)&&total>0&&Number.isFinite(buy)&&buy>=0&&buy<=total;
+          return {time:Number(r[0])/1000,open:Number(r[1]),high:Number(r[2]),low:Number(r[3]),
+            close:Number(r[4]),volume:Number(r[5]),closed:Number(r[6])<now()-2000,
+            ...(hasFlow?{takerBuyShare:buy/total}:{})};
+        }));
         // Keep the first, newest response for an overlapping candle.
         accumulated=observed([...parsed,...accumulated]);
         const stamps=raw.map(r=>Number(r[0])).filter(t=>Number.isFinite(t)&&t>0);

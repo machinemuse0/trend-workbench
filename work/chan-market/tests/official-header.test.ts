@@ -6,6 +6,7 @@ import test from 'node:test';
 import { build, type Plugin } from 'esbuild';
 import { createElement, type ComponentType } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
+import type { CenterBreakout } from '../lib/center-breakout';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 
@@ -62,3 +63,30 @@ for (const language of ['zh', 'en'] as const) {
     }
   });
 }
+
+test('combined assessment renders the prices, both sides, the period and missing flow in both languages',async()=>{
+  const bundle=await build({
+    absWorkingDir:project,entryPoints:['components/confluence-panel.tsx'],bundle:true,write:false,
+    platform:'node',format:'cjs',packages:'external',alias:{'@':project},jsx:'automatic',
+  });
+  const compiled={exports:{} as {default:ComponentType<{
+    analysis:null;loading:boolean;language:'zh'|'en';breakout?:CenterBreakout|null;
+  }>}};
+  compileFunction(bundle.outputFiles[0].text,['module','exports','require'])(compiled,compiled.exports,createRequire(import.meta.url));
+  const breakout:CenterBreakout={
+    layer:'segment',direction:'up',boundary:68000,close:68100,confirmedAt:1795219200,exchange:'Binance',takerBuyShare:.625,
+  };
+  const render=(language:'zh'|'en',event?:CenterBreakout|null,loading=false)=>
+    renderToStaticMarkup(createElement(compiled.exports.default,{analysis:null,loading,language,breakout:event}));
+  const zh=render('zh',breakout);
+  assert.match(zh,/综合判断.*中枢突破成交/);
+  assert.match(zh,/突破价.*68,000 USDT.*确认收盘价.*68,100 USDT/);
+  assert.match(zh,/主动买入.*62\.5%.*主动卖出.*37\.5%/);
+  assert.match(zh,/统计突破确认 K 线整根的 USDT 成交额/);
+  const en=render('en',{...breakout,direction:'down',exchange:'OKX',takerBuyShare:null});
+  assert.match(en,/Center breakout flow.*Downward break.*OKX spot.*Active-side split unavailable/);
+  assert.doesNotMatch(en,/Active buys|Active sells/);
+  assert.match(render('zh',null),/暂无已确认突破/);
+  assert.match(render('zh',null,true),/正在识别突破/);
+  assert.doesNotMatch(render('zh'),/中枢突破成交/);
+});
